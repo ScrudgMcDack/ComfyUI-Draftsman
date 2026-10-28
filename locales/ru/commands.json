@@ -1,0 +1,86 @@
+{
+  "Draftsman_OpenColors": {
+    "label": "Draftsman: цвета шапки и тела выделенного"
+  },
+  "Draftsman_ToggleGuides": {
+    "label": "Draftsman: вкл/выкл направляющие"
+  },
+  "Draftsman_ToggleSpacing": {
+    "label": "Draftsman: вкл/выкл магнит интервалов"
+  },
+  "Draftsman_CopyColors": {
+    "label": "Draftsman: копировать цвета выделенной ноды"
+  },
+  "Draftsman_PasteColors": {
+    "label": "Draftsman: вставить цвета в выделенное"
+  },
+  "Draftsman_FormatPainter": {
+    "label": "Draftsman: кисть формата с выделенной ноды или группы"
+  },
+  "Draftsman_ThemeRules": {
+    "label": "Draftsman: тема и правила раскраски"
+  },
+  "Draftsman_ApplyRules": {
+    "label": "Draftsman: применить правила раскраски ко всем нодам"
+  },
+  "Draftsman_AlignLeft": {
+    "label": "Draftsman: выровнять по левому краю"
+  },
+  "Draftsman_AlignHCenter": {
+    "label": "Draftsman: выровнять по центру (по горизонтали)"
+  },
+  "Draftsman_AlignRight": {
+    "label": "Draftsman: выровнять по правому краю"
+  },
+  "Draftsman_AlignTop": {
+    "label": "Draftsman: выровнять по верхнему краю"
+  },
+  "Draftsman_AlignVCenter": {
+    "label": "Draftsman: выровнять по центру (по вертикали)"
+  },
+  "Draftsman_AlignBottom": {
+    "label": "Draftsman: выровнять по нижнему краю"
+  },
+  "Draftsman_Row": {
+    "label": "Draftsman: выстроить в ряд"
+  },
+  "Draftsman_Column": {
+    "label": "Draftsman: выстроить в столбец"
+  },
+  "Draftsman_SameWidth": {
+    "label": "Draftsman: одинаковая ширина"
+  },
+  "Draftsman_SameHeight": {
+    "label": "Draftsman: одинаковая высота"
+  },
+  "Draftsman_SameSize": {
+    "label": "Draftsman: одинаковый размер"
+  },
+  "Draftsman_FitGroups": {
+    "label": "Draftsman: подогнать выделенные группы по нодам (по клеткам)"
+  },
+  "Draftsman_NudgeLeft": {
+    "label": "Draftsman: сдвинуть выделение на клетку влево"
+  },
+  "Draftsman_NudgeRight": {
+    "label": "Draftsman: сдвинуть выделение на клетку вправо"
+  },
+  "Draftsman_NudgeUp": {
+    "label": "Draftsman: сдвинуть выделение на клетку вверх"
+  },
+  "Draftsman_NudgeDown": {
+    "label": "Draftsman: сдвинуть выделение на клетку вниз"
+  },
+  "Draftsman_NudgeLeftBig": {
+    "label": "Draftsman: сдвинуть выделение влево (большой шаг)"
+  },
+  "Draftsman_NudgeRightBig": {
+    "label": "Draftsman: сдвинуть выделение вправо (большой шаг)"
+  },
+  "Draftsman_NudgeUpBig": {
+    "label": "Draftsman: сдвинуть выделение вверх (большой шаг)"
+  },
+  "Draftsman_NudgeDownBig": {
+    "label": "Draftsman: сдвинуть выделение вниз (большой шаг)"
+  }
+}

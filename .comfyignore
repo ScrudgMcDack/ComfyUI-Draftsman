@@ -1,0 +1,4 @@
+# not needed inside the published node archive
+.github/
+docs/
+icon.png

@@ -1,0 +1,19 @@
+[project]
+name = "comfyui-draftsman"
+description = "Styling and layout tools for the ComfyUI graph: separate header/body colors for nodes and groups, format painter, color rules and themes, alignment guides, spacing magnet, align / line up / same size / fit group by grid cells, arrow-key nudging. English and Russian UI."
+version = "1.0.0"
+license = { file = "LICENSE" }
+readme = "README.md"
+dependencies = []
+keywords = ["comfyui", "frontend", "theme", "colors", "layout", "alignment", "guides", "snap", "groups"]
+
+[project.urls]
+Repository = "https://github.com/ScrudgMcDack/ComfyUI-Draftsman"
+Documentation = "https://github.com/ScrudgMcDack/ComfyUI-Draftsman#readme"
+"Bug Tracker" = "https://github.com/ScrudgMcDack/ComfyUI-Draftsman/issues"
+
+[tool.comfy]
+PublisherId = "scrudgmcdack"
+DisplayName = "Draftsman"
+Icon = "https://raw.githubusercontent.com/ScrudgMcDack/ComfyUI-Draftsman/main/icon.png"
+includes = []
