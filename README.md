@@ -1,8 +1,15 @@
 # ComfyUI-Draftsman
 
-**English** · [Русский](README.ru.md)
+<p align="center">
+  <img src="icon.png" alt="Draftsman">
+</p>
 
-![Draftsman](icon.png)
+<p align="center">
+  <a href="https://github.com/ScrudgMcDack/ComfyUI-Draftsman/releases"><img src="https://img.shields.io/github/v/release/ScrudgMcDack/ComfyUI-Draftsman?include_prereleases&color=blue&logo=github&label=Release" alt="Release"></a>
+  <a href="https://github.com/ScrudgMcDack/ComfyUI-Draftsman/releases"><img src="https://img.shields.io/github/release-date/ScrudgMcDack/ComfyUI-Draftsman?color=green&logo=github&label=Release%20date" alt="Release date"></a>
+</p>
+
+<p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
 Styling and layout tools for the ComfyUI graph: separate header and body colors for nodes **and groups**,
 a format painter, color rules and theme files, alignment guides, a spacing magnet, and align / line up /
@@ -69,7 +76,44 @@ stacked — matching the spacing magnet.
 - The **spacing magnet** pulls a node or group to an exact number of grid cells from its neighbour: 3 / 3 inside a
   group, 3 between side-by-side groups, 6 between stacked groups (measured between the nodes closest to the facing
   group edges). An orange dimension line with a label shows when the magnet has caught.
+- While a node, a group or the canvas is dragged, the node description tooltip is hidden, so it does not cover the
+  guides; it comes back after the drop.
 - Works with the classic canvas and with Vue nodes (Nodes 2.0).
+
+## Links
+In a big workflow the links of one node are hard to follow, so Draftsman puts them in focus:
+- **selected nodes** — their links are drawn bright and on top of the others, the other links are dimmed; incoming
+  links are blue, outgoing ones orange, and a comet — a bright head with a fading tail — runs along each of them from
+  the output to the input; the next one leaves only when the previous one has arrived (through reroutes it runs the
+  whole way; links of one output start their comets together, so on a shared trunk they are one comet);
+- **hovering an input or output** — only its links are highlighted.
+
+Settings → Draftsman → Links: on/off, opacity of the other links, animation and its speed, the two colors (or keep
+the data-type colors). The comets are drawn on their own transparent layer above the canvas at the screen rate, so
+they move smoothly and the graph is not redrawn for them; they are hidden under the nodes as the links are.
+
+## Styled output tooltips
+Nodes that describe their outputs (for example [Rigstools](https://github.com/ScrudgMcDack/ComfyUI-Rigstools)) get a
+short title and coloured lines about the current value in the output tooltip: green — what comes out, amber — a
+substitute or a problem, grey — a note. Other tooltips (inputs, widgets, node titles, other nodes) are not changed.
+Turn it off in Settings → Draftsman → Tooltips.
+
+**For node authors.** Add a method to your node; nothing else is needed and there is no dependency on Draftsman —
+without it the stock tooltip is shown:
+
+```js
+nodeType.prototype.getStyledOutputTooltip = function (index) {
+  // null — leave the stock tooltip as is
+  return {
+    title: "Seed",            // optional; default — the first paragraph of the stock tooltip
+    lines: [{ kind: "info", text: "From the parameters: 1234" }],   // kind: "info" | "warn" | "muted"
+  };
+};
+```
+
+The frontend draws tooltips as plain text, so Draftsman shortens that text to the title and adds the lines next to it.
+This relies on the tooltip markup of the frontend (`.node-tooltip`); if a frontend update changes it, the stock
+tooltip is shown again.
 
 ## Hotkeys
 | Keys | Action |
@@ -82,7 +126,7 @@ stacked — matching the spacing magnet.
 All commands (`Draftsman: …`) can be rebound in Settings → Keybinding.
 
 ## Settings
-Settings → **Draftsman**: Guides, Spacing, Layout, Colors. Each non-obvious setting has an ⓘ tooltip.
+Settings → **Draftsman**: Guides, Spacing, Layout, Colors, Links, Tooltips. Each non-obvious setting has an ⓘ tooltip.
 
 ## Limitations
 - The separate group header/body rendering replicates the stock group look of the 1.5x frontend.

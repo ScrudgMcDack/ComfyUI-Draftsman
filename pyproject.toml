@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-draftsman"
-description = "Styling and layout tools for the ComfyUI graph: separate header/body colors for nodes and groups, format painter, color rules and themes, alignment guides, spacing magnet, align / line up / same size / fit group by grid cells, arrow-key nudging. English and Russian UI."
-version = "1.0.0"
+description = "Styling and layout tools for the ComfyUI graph: separate header/body colors for nodes and groups, format painter, color rules and themes, alignment guides, spacing magnet, align / line up / same size / fit group by grid cells, arrow-key nudging, link focus (highlight, flow, hover label), styled output tooltips. English and Russian UI."
+version = "1.1.0"
 license = { file = "LICENSE" }
 readme = "README.md"
 dependencies = []

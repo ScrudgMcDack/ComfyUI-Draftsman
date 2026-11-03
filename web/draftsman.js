@@ -271,6 +271,14 @@ const S = {
   NUDGE_ON: `${P}.Layout.Nudge`,
   NUDGE_BIG: `${P}.Layout.NudgeBig`,
   GROUP_PAD: `${P}.Layout.GroupPadding`,
+  TIPS_ON: `${P}.Tooltips.Styled`,
+  LINKS_FOCUS: `${P}.Links.Focus`,
+  LINKS_DIM: `${P}.Links.Dim`,
+  LINKS_ANIM: `${P}.Links.Animate`,
+  LINKS_SPEED: `${P}.Links.Speed`,
+  LINKS_INOUT: `${P}.Links.InOutColors`,
+  LINKS_IN_COLOR: `${P}.Links.InColor`,
+  LINKS_OUT_COLOR: `${P}.Links.OutColor`,
   MIGRATED: `${P}.Migrated`,
 };
 
@@ -306,6 +314,14 @@ const DEFAULTS = {
   [S.NUDGE_BIG]: 5,
   [S.GROUP_PAD]: 1,
   [S.MIGRATED]: false,
+  [S.TIPS_ON]: true,
+  [S.LINKS_FOCUS]: true,
+  [S.LINKS_DIM]: 25,
+  [S.LINKS_ANIM]: true,
+  [S.LINKS_SPEED]: 220,
+  [S.LINKS_INOUT]: true,
+  [S.LINKS_IN_COLOR]: "#4fc3ff",
+  [S.LINKS_OUT_COLOR]: "#ffab40",
 };
 
 const LS_KEY = "Draftsman.settings";
@@ -406,6 +422,26 @@ const SETTINGS_DEF = [
   { id: S.GROUP_PAD, category: [CAT, "Layout", "3"], name: "Group padding around nodes for “Fit group” (cells)",
     tooltip: "Plus the group header on top. With 1 cell and 1 cell between groups, nodes of neighbouring groups end up 3 cells apart side by side and 6 cells apart stacked",
     type: "number", attrs: { min: 0, max: 20, step: 1 }, defaultValue: DEFAULTS[S.GROUP_PAD] },
+  { id: S.LINKS_FOCUS, category: [CAT, "Links", "1"], name: "Highlight the links of the selection and of the hovered slot",
+    tooltip: "The links of the selected nodes are drawn bright and on top, the other links are dimmed. Hovering an input or output highlights only its links.",
+    type: "boolean", defaultValue: DEFAULTS[S.LINKS_FOCUS], onChange: redraw },
+  { id: S.LINKS_DIM, category: [CAT, "Links", "2"], name: "Opacity of the other links meanwhile, %",
+    type: "slider", attrs: { min: 0, max: 100, step: 5 }, defaultValue: DEFAULTS[S.LINKS_DIM], onChange: redraw },
+  { id: S.LINKS_ANIM, category: [CAT, "Links", "3"], name: "Animate the highlighted links (a comet from output to input)",
+    tooltip: "The comets are drawn on their own transparent layer at the screen rate; the graph is not redrawn for them. Turn it off if even that is too much for the computer.",
+    type: "boolean", defaultValue: DEFAULTS[S.LINKS_ANIM], onChange: redraw },
+  { id: S.LINKS_SPEED, category: [CAT, "Links", "4"], name: "Animation speed (px per second)",
+    type: "slider", attrs: { min: 20, max: 600, step: 20 }, defaultValue: DEFAULTS[S.LINKS_SPEED] },
+  { id: S.LINKS_INOUT, category: [CAT, "Links", "5"], name: "Different colors for incoming and outgoing links",
+    tooltip: "Off — the highlighted links keep the color of their data type.",
+    type: "boolean", defaultValue: DEFAULTS[S.LINKS_INOUT], onChange: redraw },
+  { id: S.LINKS_IN_COLOR, category: [CAT, "Links", "6"], name: "Incoming links color (#hex)",
+    type: "text", defaultValue: DEFAULTS[S.LINKS_IN_COLOR], onChange: redraw },
+  { id: S.LINKS_OUT_COLOR, category: [CAT, "Links", "7"], name: "Outgoing links color (#hex)",
+    type: "text", defaultValue: DEFAULTS[S.LINKS_OUT_COLOR], onChange: redraw },
+  { id: S.TIPS_ON, category: [CAT, "Tooltips", "1"], name: "Styled tooltips for node outputs",
+    tooltip: "Nodes that describe their outputs (e.g. Rigstools) get a short title and coloured lines about the current value in the output tooltip: green — what comes out, amber — a substitute or a problem, grey — a note. Other tooltips are not changed.",
+    type: "boolean", defaultValue: DEFAULTS[S.TIPS_ON] },
   { id: S.MIGRATED, category: [CAT, "Layout", "9"], name: "Settings migrated from NodeTheme", type: "hidden",
     defaultValue: DEFAULTS[S.MIGRATED] },
 ];
@@ -765,6 +801,10 @@ function patchGroupDraw() {
 // ───────────────────────────── dialog ─────────────────────────────
 
 const CSS = `
+.node-tooltip .dm-tip-lines{margin-top:6px;display:flex;flex-direction:column;gap:3px;white-space:normal}
+.node-tooltip .dm-tip-line{display:flex;gap:6px;align-items:flex-start}
+.node-tooltip .dm-tip-line svg{flex:0 0 auto;margin-top:2px}
+
 .dm-dlg{position:fixed;z-index:10050;width:340px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:hidden;
   display:flex;flex-direction:column;
   background:var(--comfy-menu-bg,#202020);color:var(--fg-color,#ddd);border:1px solid var(--border-color,#444);
@@ -2415,6 +2455,583 @@ function patchProtoMenu(proto, method, make) {
 
 // ───────────────────────────── registration ─────────────────────────────
 
+// ───────────────────────────── link focus ─────────────────────────────
+// The links of the selected nodes (or of the hovered input / output) are drawn bright, on top of the others and,
+// optionally, with a light wave running from the output to the input (like a progress bar); the other links are
+// dimmed. LiteGraph draws every link segment with canvas.renderLink(); it is wrapped to dim the others and to
+// remember the paths of ours, which are then drawn again after all links.
+// Performance: no canvas shadows (shadowBlur is what made a big selection lag), the settings are read once per
+// frame, the reroute chains are cached while the highlighted set is the same, and the comets are drawn on their own
+// overlay canvas at the screen rate — the graph itself is redrawn only when something changes.
+
+const linkFocus = { key: "", phase: 0, segs: null, snap: null, known: new Map(), ids: null, rr: new Map(), chains: new Map(),
+  hover: null, sig: "", cfg: null, chainSig: "" };
+
+const COMET = { tail: 90, samples: 18 };   // tail length (px), points along it   // tail length (px), dots in the tail, frame rate
+
+/** The segment as LiteGraph draws it (spline / linear / straight), as a polyline: { pts: [[x, y, distance]], len }. */
+function segmentPoly(canvas, a, b, sd, ed, opts) {
+  const dir = { 1: [0, -1], 2: [0, 1], 3: [-1, 0], 4: [1, 0] };
+  const v = (d, dflt) => dir[d ?? dflt] ?? [0, 0];
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const dist = Math.hypot(dx, dy);
+  const mode = canvas.links_render_mode;
+  const L = globalThis.LiteGraph ?? {};
+  const s = v(sd, 4), e = v(ed, 3);
+  let raw;
+  if (mode === (L.STRAIGHT_LINK ?? 0)) {
+    const x1 = a[0] + 10, x2 = b[0] - 10, mx = (x1 + x2) / 2;
+    raw = [a, [x1, a[1]], [mx, a[1]], [mx, b[1]], [x2, b[1]], b];
+  } else if (mode === (L.LINEAR_LINK ?? 1)) {
+    raw = [a, [a[0] + s[0] * 15, a[1] + s[1] * 15], [b[0] + e[0] * 15, b[1] + e[1] * 15], b];
+  } else {
+    const c1 = opts?.startControl ? [a[0] + opts.startControl[0], a[1] + opts.startControl[1]] : [a[0] + s[0] * dist * 0.25, a[1] + s[1] * dist * 0.25];
+    const c2 = opts?.endControl ? [b[0] + opts.endControl[0], b[1] + opts.endControl[1]] : [b[0] + e[0] * dist * 0.25, b[1] + e[1] * dist * 0.25];
+    raw = [];
+    for (let i = 0; i <= 32; i++) {
+      const t = i / 32, u = 1 - t;
+      raw.push([u * u * u * a[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t * t * t * b[0],
+        u * u * u * a[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t * t * t * b[1]]);
+    }
+  }
+  const pts = [];
+  let len = 0;
+  raw.forEach((p, i) => { if (i) len += Math.hypot(p[0] - raw[i - 1][0], p[1] - raw[i - 1][1]); pts.push([p[0], p[1], len]); });
+  return { pts, len };
+}
+
+/** The segment of a link (its reroute parts) at `d` px from the output: { index, part, d (px into the part) }. */
+function segmentAt(parts, d) {
+  let start = 0;
+  for (let i = 0; i < parts.length; i++) {
+    if (d <= start + parts[i].len || i === parts.length - 1) return { index: i, part: parts[i], d: d - start };
+    start += parts[i].len;
+  }
+  return { index: 0, part: parts[0], d };
+}
+
+/** A comet as one teardrop: the round bright head, the body tapering into the tail along the link; white, fading
+ *  towards the end of the tail, with a soft wider glow of the same shape under it. */
+function drawComet(ctx, parts, total, head, width) {
+  const { tail, samples } = COMET;
+  const R = width * 0.75 + 1.2;                       // half-width of the head
+  const pts = [];                                     // [x, y, half-width] from the head back along the tail
+  for (let i = 0; i <= samples; i++) {
+    const t = i / samples, d = head - t * tail;
+    if (d < 0) break;
+    if (d > total) continue;                          // the head is already in the input: the rest drains into it
+    const s = segmentAt(parts, d);
+    const [x, y] = pointAt(s.part.poly, s.d);
+    pts.push([x, y, R * Math.pow(1 - t, 0.85)]);
+  }
+  if (pts.length < 2) return;
+  const headIn = head <= total;
+  const shape = (scale) => {
+    const left = [], right = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[Math.min(i + 1, pts.length - 1)], o = pts[Math.max(i - 1, 0)];
+      let nx = -(q[1] - o[1]), ny = q[0] - o[0];
+      const n = Math.hypot(nx, ny) || 1;
+      nx /= n; ny /= n;
+      const w = p[2] * scale;
+      left.push([p[0] + nx * w, p[1] + ny * w]);
+      right.push([p[0] - nx * w, p[1] - ny * w]);
+    }
+    const path = new Path2D();
+    path.moveTo(left[0][0], left[0][1]);
+    for (const p of left) path.lineTo(p[0], p[1]);
+    for (let i = right.length - 1; i >= 0; i--) path.lineTo(right[i][0], right[i][1]);
+    if (headIn) {                                     // the round front of the head
+      const [hx, hy] = pts[0], ang = Math.atan2(left[0][1] - hy, left[0][0] - hx);
+      const fwd = Math.atan2(hy - pts[1][1], hx - pts[1][0]);          // the direction the comet flies
+      const ccw = Math.cos(ang + 1.5 * Math.PI - fwd) < 0;             // go round the front, not the back
+      path.arc(hx, hy, R * scale, ang + Math.PI, ang + 2 * Math.PI, ccw);
+    }
+    path.closePath();
+    return path;
+  };
+  const end = pts[pts.length - 1];
+  const fade = (a) => {
+    const g = ctx.createLinearGradient(pts[0][0], pts[0][1], end[0], end[1]);
+    g.addColorStop(0, `rgba(255,255,255,${a})`);
+    g.addColorStop(0.35, `rgba(255,255,255,${a * 0.6})`);
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    return g;
+  };
+  ctx.fillStyle = fade(0.28);
+  ctx.fill(shape(2.1));
+  ctx.fillStyle = fade(0.95);
+  ctx.fill(shape(1));
+}
+
+/** The point at `d` px from the start of a polyline. */
+function pointAt(poly, d) {
+  const pts = poly.pts;
+  let lo = 0, hi = pts.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid][2] < d) lo = mid; else hi = mid; }
+  const p = pts[lo], q = pts[hi], span = q[2] - p[2] || 1, t = Math.min(1, Math.max(0, (d - p[2]) / span));
+  return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+}
+
+function linkOf(graph, id) {
+  const l = graph?.links;
+  return id == null || !l ? null : (l.get ? l.get(id) : l[id]);
+}
+
+/** The slot under the mouse: { node, kind: "in" | "out", index } — the same hit boxes as the frontend. */
+function hoveredSlot(c = app.canvas) {
+  const node = c?.node_over;
+  const m = c?.graph_mouse;
+  if (!node || !m || node.flags?.collapsed) return null;
+  const inRect = (x, y, rx, ry, w, h) => x >= rx && x <= rx + w && y >= ry && y <= ry + h;
+  for (let i = 0; i < (node.inputs?.length ?? 0); i++) {
+    const inp = node.inputs[i];
+    const p = node.getInputPos?.(i);
+    const w = 20 + ((inp.label?.length ?? inp.localized_name?.length ?? inp.name?.length) || 3) * 7;
+    if (p && inp.link != null && inRect(m[0], m[1], p[0] - 10, p[1] - 10, w, 20)) return { node, kind: "in", index: i };
+  }
+  for (let i = 0; i < (node.outputs?.length ?? 0); i++) {
+    const p = node.getOutputPos?.(i);
+    if (p && node.outputs[i].links?.length && inRect(m[0], m[1], p[0] - 10, p[1] - 10, 40, 20)) return { node, kind: "out", index: i };
+  }
+  return null;
+}
+
+/** Map link id -> "in" | "out" (relative to the selection / the hovered slot); null when nothing is focused. */
+function focusedLinks(c = app.canvas) {
+  if (getSetting(S.LINKS_FOCUS) === false || !c?.graph) return null;
+  const ids = new Map();
+  const h = linkFocus.hover;
+  if (h) {
+    if (h.kind === "in") { const id = h.node.inputs[h.index]?.link; if (id != null) ids.set(id, "in"); }
+    else for (const id of h.node.outputs[h.index]?.links ?? []) ids.set(id, "out");
+    return ids.size ? throughRerouteNodes(c.graph, ids) : null;
+  }
+  const sel = getSelectedNodes(c);
+  if (!sel.length) return null;
+  for (const n of sel) {
+    for (const inp of n.inputs ?? []) if (inp.link != null && !ids.has(inp.link)) ids.set(inp.link, "in");
+    for (const out of n.outputs ?? []) for (const id of out.links ?? []) ids.set(id, "out");
+  }
+  return ids.size ? throughRerouteNodes(c.graph, ids) : null;
+}
+
+/** Reroute nodes (stock "Reroute", "Reroute (rgthree)", "ReroutePrimitive|pysssss"…) only pass a link on: their
+ *  links belong to the link they continue — the same role and color, and one comet through all of them. */
+const isRerouteNode = (n) => !!n && /reroute/i.test(String(n.type ?? n.comfyClass ?? ""));
+
+function throughRerouteNodes(graph, ids) {
+  const queue = [...ids.entries()];
+  while (queue.length) {
+    const [id, role] = queue.pop();
+    const l = linkOf(graph, id);
+    if (!l) continue;
+    if (role === "in") {                              // up to the real source
+      const src = graph.getNodeById(l.origin_id);
+      if (!isRerouteNode(src)) continue;
+      for (const inp of src.inputs ?? []) if (inp.link != null && !ids.has(inp.link)) { ids.set(inp.link, "in"); queue.push([inp.link, "in"]); }
+    } else {                                          // down to the real targets
+      const dst = graph.getNodeById(l.target_id);
+      if (!isRerouteNode(dst)) continue;
+      for (const out of dst.outputs ?? []) for (const nid of out.links ?? []) if (!ids.has(nid)) { ids.set(nid, "out"); queue.push([nid, "out"]); }
+    }
+  }
+  return ids;
+}
+
+function focusColor(role, link) {
+  const cfg = linkFocus.cfg;
+  if (cfg ? !cfg.inout : getSetting(S.LINKS_INOUT) === false) {
+    return link?.color || LGraphCanvasOf()?.link_type_colors?.[link?.type] || app.canvas?.default_link_color || "#9a9";
+  }
+  if (cfg) return role === "in" ? cfg.inColor : cfg.outColor;
+  return safeColor(getSetting(role === "in" ? S.LINKS_IN_COLOR : S.LINKS_OUT_COLOR), role === "in" ? "#4fc3ff" : "#ffab40");
+}
+const LGraphCanvasOf = () => app.canvas?.constructor;
+const safeColor = (v, d) => (/^#[0-9a-f]{3,8}$/i.test(String(v || "").trim()) ? String(v).trim() : d);
+
+function installLinkFocus(canvas) {
+  const proto = Object.getPrototypeOf(canvas);
+  if (proto.__dmLinks) return;
+  proto.__dmLinks = true;
+
+  const renderLink = proto.renderLink;
+  proto.renderLink = function (ctx, a, b, link, skipBorder, flow, color, sd, ed, opts) {
+    const ids = linkFocus.ids;
+    if (!ids || !link || link.id == null || link.id === -1) {
+      return renderLink.apply(this, arguments);
+    }
+    // a segment ending at a reroute may be shared by several links: it is ours when any focused link runs through it
+    const rr = opts?.reroute;
+    const role = rr ? linkFocus.rr.get(rr.id) : ids.get(link.id);
+    if (!role) {
+      const alpha = ctx.globalAlpha;
+      ctx.globalAlpha = alpha * linkFocus.cfg.dim;
+      try { return renderLink.apply(this, arguments); } finally { ctx.globalAlpha = alpha; }
+    }
+    const r = renderLink.apply(this, arguments);
+    const path = (rr ?? link).path;
+    if (path && !skipBorder && a && b) {
+      const poly = segmentPoly(this, a, b, sd, ed, opts);
+      const seg = { path, role, link, poly, len: poly.len };
+      if (rr) linkFocus.segs.reroutes.set(rr.id, seg); else linkFocus.segs.finals.set(link.id, seg);
+      linkFocus.known.set(rr ? "r" + rr.id : "f" + link.id, seg);
+    }
+    return r;
+  };
+
+  const drawConnections = proto.drawConnections;
+  proto.drawConnections = function (ctx) {
+    linkFocus.cfg = {
+      dim: Number(getSetting(S.LINKS_DIM) ?? 25) / 100,
+      anim: getSetting(S.LINKS_ANIM) !== false,
+      speed: Number(getSetting(S.LINKS_SPEED) ?? 150),
+      inout: getSetting(S.LINKS_INOUT) !== false,
+      inColor: safeColor(getSetting(S.LINKS_IN_COLOR), "#4fc3ff"),
+      outColor: safeColor(getSetting(S.LINKS_OUT_COLOR), "#ffab40"),
+    };
+    linkFocus.ids = focusedLinks(this);
+    // a new set of highlighted links: the waves start again from the outputs
+    const sig = linkFocus.ids ? [...linkFocus.ids.keys()].join(",") : "";
+    if (sig !== linkFocus.sig) { linkFocus.sig = sig; linkFocus.phase = 0; linkFocus.known = new Map(); }
+    // reroutes the focused links run through (one reroute can carry several links); cached while the set is the same
+    const chainSig = sig + "|" + (this.graph?.reroutes?.size ?? 0) + "|" + (this.graph?._version ?? "");
+    if (chainSig !== linkFocus.chainSig) {
+      linkFocus.chainSig = chainSig;
+      linkFocus.rr = new Map();
+      linkFocus.chains = new Map();
+      for (const [id, role] of linkFocus.ids ?? []) {
+        const chain = rerouteChain(this.graph, linkOf(this.graph, id));
+        linkFocus.chains.set(id, chain);
+        for (const r of chain) if (!linkFocus.rr.has(r.id)) linkFocus.rr.set(r.id, role);
+      }
+    }
+    linkFocus.segs = { reroutes: new Map(), finals: new Map() };
+    try { return drawConnections.apply(this, arguments); }
+    finally {
+      const segs = linkFocus.segs;
+      linkFocus.segs = null;
+      linkFocus.snap = null;
+      if (linkFocus.ids && (segs.finals.size || segs.reroutes.size)) {
+        try { drawFocusedLinks(this, ctx, segs); } catch (e) { console.error("[Draftsman] links", e); }
+      }
+      linkFocus.ids = null;
+    }
+  };
+
+  // what is under the mouse changes the focus: redraw the links only when it does
+  let pending = false;
+  addEventListener("pointermove", () => {
+    if (pending) return;
+    pending = true;
+    // after LiteGraph has handled the move (node_over / graph_mouse are updated by its own listener)
+    requestAnimationFrame(() => { pending = false; updateHover(); });
+  }, { passive: true, capture: true });
+  const updateHover = () => {
+    const h = getSetting(S.LINKS_FOCUS) === false ? null : hoveredSlot(canvas);
+    const key = h ? `${h.node.id}:${h.kind}:${h.index}` : "";
+    if (key !== linkFocus.key) {
+      linkFocus.key = key;
+      linkFocus.hover = h;
+      canvas.setDirty?.(true, true);
+    }
+  };
+}
+
+/** Reroutes of a link from the output to the input. */
+function rerouteChain(graph, link) {
+  const chain = [];
+  const seen = new Set();
+  let r = link?.parentId != null ? graph?.getReroute?.(link.parentId) ?? graph?.reroutes?.get?.(link.parentId) : null;
+  while (r && !seen.has(r.id)) {
+    seen.add(r.id);
+    chain.unshift(r);
+    r = r.parentId != null ? graph.getReroute?.(r.parentId) ?? graph.reroutes?.get?.(r.parentId) : null;
+  }
+  return chain;
+}
+
+function drawFocusedLinks(canvas, ctx, segs) {
+  const width = canvas.connections_width ?? 3;
+  const cfg = linkFocus.cfg;
+  const anim = cfg.anim && !canvas.low_quality;
+  ctx.save();
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.setLineDash([]);
+  const all = [...segs.reroutes.values(), ...segs.finals.values()];
+
+  // 1. every focused segment once: a soft halo (a wide translucent stroke — much cheaper than shadowBlur) and the
+  //    bright line on it
+  ctx.globalAlpha = 0.28;
+  ctx.lineWidth = width + 6;
+  for (const seg of all) { ctx.strokeStyle = focusColor(seg.role, seg.link); ctx.stroke(seg.path); }
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = width + 1;
+  for (const seg of all) { ctx.strokeStyle = focusColor(seg.role, seg.link); ctx.stroke(seg.path); }
+
+  // 2. a comet: a bright head with a fading tail runs from the output to the input — one at a time on a link; the
+  //    next one leaves the output only when the previous one (its tail too) has reached the input. Its position is
+  //    measured along the whole link, through all its reroutes. Links that leave one output share one cycle (the
+  //    length of the longest of them), so their comets leave together and are one comet on a shared trunk.
+  if (anim) {
+    const runs = [], cycle = new Map();
+    const g = canvas.graph;
+    const crossings = new Map();   // a reroute node: a straight piece from its input to its output (under the node)
+    const across = (node) => {
+      if (!crossings.has(node.id)) {
+        const a = node.getInputPos?.(0), b = node.getOutputPos?.(0);
+        const len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
+        crossings.set(node.id, a && b ? { poly: { pts: [[a[0], a[1], 0], [b[0], b[1], len]], len }, len } : null);
+      }
+      return crossings.get(node.id);
+    };
+    // LiteGraph skips the links outside the view: their comets use the shape from the last time they were drawn,
+    // so a comet does not vanish or jump while the canvas is moved
+    const known = (map, key, id) => map.get(id) ?? linkFocus.known.get(key + id);
+    const partsOf = (id) => [...(linkFocus.chains.get(id) ?? []).map((r) => known(segs.reroutes, "r", r.id)),
+      known(segs.finals, "f", id)];
+    for (const id of linkFocus.ids?.keys() ?? []) {
+      let l = linkOf(g, id);
+      // a comet runs from the real source to the real target: start at the links that end at a real node, and
+      // walk up through the reroute nodes in front of them
+      if (!l || isRerouteNode(g.getNodeById(l.target_id))) continue;
+      let parts = partsOf(id);
+      for (let guard = 0; guard < 50; guard++) {
+        const src = g.getNodeById(l.origin_id);
+        const up = isRerouteNode(src) ? src.inputs?.[0]?.link : null;
+        const ul = up != null && linkFocus.ids.has(up) ? linkOf(g, up) : null;
+        if (!ul) break;
+        parts = [...partsOf(up), across(src), ...parts];
+        l = ul;
+      }
+      parts = parts.filter(Boolean);
+      if (!parts.length) continue;
+      const from = `${l?.origin_id}:${l?.origin_slot}`;
+      const total = parts.reduce((sum, p) => sum + p.len, 0);
+      cycle.set(from, Math.max(cycle.get(from) ?? 0, total));
+      runs.push({ parts, from });
+    }
+    // the comets themselves are drawn on the overlay (see cometOverlay), 60 times a second, without redrawing
+    // the graph; this only hands over the lines they fly along
+    linkFocus.snap = { canvas, runs: runs.map((r) => ({ ...r, total: r.parts.reduce((sum, p) => sum + p.len, 0) })),
+      cycle, width };
+    cometOverlay.start(canvas);
+  }
+  ctx.restore();
+}
+
+/** A transparent canvas right above the graph canvas (below the DOM widgets and menus) that draws only the comets.
+ *  It uses the lines of the last graph draw and the current pan / zoom, and hides the comets under the nodes by
+ *  cutting the node rectangles out of its drawing area. */
+const cometOverlay = {
+  el: null, raf: 0, last: 0,
+  start(canvas) {
+    if (!this.raf) this.raf = requestAnimationFrame((t) => this.frame(t, canvas));
+  },
+  ensure(canvas) {
+    const main = canvas.canvas;
+    if (!main?.parentNode) return null;
+    if (!this.el || this.el.parentNode !== main.parentNode || this.el.previousSibling !== main) {
+      this.el?.remove();
+      const el = document.createElement("canvas");
+      el.className = "dm-comets";
+      el.style.cssText = "position:absolute;pointer-events:none;";
+      main.parentNode.insertBefore(el, main.nextSibling);
+      this.el = el;
+    }
+    const el = this.el;
+    if (el.width !== main.width || el.height !== main.height) { el.width = main.width; el.height = main.height; }
+    const cs = el.style, w = main.clientWidth + "px", h = main.clientHeight + "px";
+    if (cs.width !== w) cs.width = w;
+    if (cs.height !== h) cs.height = h;
+    const l = main.offsetLeft + "px", tp = main.offsetTop + "px";
+    if (cs.left !== l) cs.left = l;
+    if (cs.top !== tp) cs.top = tp;
+    const z = getComputedStyle(main).zIndex;
+    if (cs.zIndex !== z) cs.zIndex = z === "auto" ? "" : z;
+    return el;
+  },
+  clear() {
+    const ctx = this.el?.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);               // the last frame left the zoom transform on the context
+    ctx.clearRect(0, 0, this.el.width, this.el.height);
+  },
+  frame(t, canvas) {
+    this.raf = 0;
+    const snap = linkFocus.snap;
+    const cfg = linkFocus.cfg;
+    if (!snap || snap.canvas !== canvas || !cfg?.anim || canvas.low_quality || document.hidden) {
+      this.clear();
+      this.last = 0;
+      if (snap && !document.hidden) this.raf = requestAnimationFrame((tt) => this.frame(tt, canvas));
+      return;
+    }
+    const dt = this.last ? Math.min(250, t - this.last) : 0;
+    this.last = t;
+    linkFocus.phase += dt * cfg.speed / 1000;
+    const el = this.ensure(canvas);
+    if (el) {
+      const ctx = el.getContext("2d");
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, el.width, el.height);
+      const ds = canvas.ds, r = el.width / (canvas.canvas.clientWidth || el.width), sc = ds.scale * r;
+      ctx.setTransform(sc, 0, 0, sc, ds.offset[0] * sc, ds.offset[1] * sc);
+      const drawn = new Set();   // links of one output: one comet while their heads are on the same segment
+      for (const { parts, from, total } of snap.runs) {
+        const head = linkFocus.phase % (snap.cycle.get(from) + COMET.tail + 20);
+        const at = segmentAt(parts, Math.min(head, total)).part;   // a shared reroute segment is the same object
+        if (drawn.has(at)) continue;
+        drawn.add(at);
+        drawComet(ctx, parts, total, head, snap.width);
+      }
+      // under a node the comet is covered as much as the links are: fully for opaque nodes, partly with the
+      // "node opacity" setting of ComfyUI (the links show through semi-transparent nodes, so do the comets)
+      const cover = Math.min(1, Math.max(0, Number(rawSetting("Comfy.Node.Opacity") ?? 1)));
+      if (cover > 0) {
+        const th = globalThis.LiteGraph?.NODE_TITLE_HEIGHT ?? 30, rad = globalThis.LiteGraph?.ROUND_RADIUS ?? 8;
+        const vx0 = -ds.offset[0], vy0 = -ds.offset[1], vx1 = vx0 + el.width / sc, vy1 = vy0 + el.height / sc;
+        const mask = new Path2D();
+        for (const n of canvas.graph?._nodes ?? []) {
+          const b = n.boundingRect;
+          const [x, y, w, h] = b && b.length >= 4 ? b : [n.pos?.[0], (n.pos?.[1] ?? 0) - th, n.size?.[0], (n.size?.[1] ?? 0) + th];
+          if (!(w > 0) || x > vx1 || y > vy1 || x + w < vx0 || y + h < vy0) continue;
+          if (mask.roundRect) mask.roundRect(x, y, w, h, rad); else mask.rect(x, y, w, h);
+        }
+        ctx.save();
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = `rgba(0,0,0,${cover})`;
+        ctx.fill(mask);
+        ctx.restore();
+      }
+    }
+    this.raf = requestAnimationFrame((tt) => this.frame(tt, canvas));
+  },
+};
+
+// ───────────────────────────── styled output tooltips ─────────────────────────────
+// A node may describe its outputs:  node.getStyledOutputTooltip(index) ->
+//   { title?: string, lines: [{ kind: "info" | "warn" | "muted", text: string }] } | null
+// The stock tooltip of that output keeps its first paragraph as the title (or `title`), the lines go under it with an
+// icon and a colour. Nodes without the method, inputs, widgets and node titles keep the stock tooltip.
+// The frontend renders the tooltip as plain text, so its text node is shortened and our lines are added next to it.
+
+const TIP_COLORS = { info: "#5fb878", warn: "#e8a33a", muted: "#9a9a9a" };
+const TIP_ICONS = {
+  info: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.2v4" stroke-linecap="round"/><circle cx="8" cy="4.9" r=".9" fill="currentColor" stroke="none"/></svg>',
+  warn: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8 1.8 15 14H1z"/><path d="M8 6.2v3.8" stroke-linecap="round"/><circle cx="8" cy="12" r=".9" fill="currentColor" stroke="none"/></svg>',
+};
+TIP_ICONS.muted = TIP_ICONS.info;
+
+/** The output under the mouse, with the same hit box as the frontend (and inputs first, as it does). */
+function hoveredOutput() {
+  const c = app.canvas;
+  const node = c?.node_over;
+  const m = c?.graph_mouse;
+  if (!node || !m || node.flags?.collapsed || !node.outputs?.length) return null;
+  const inside = (p, x, y) => x >= p[0] - 10 && x <= p[0] + 30 && y >= p[1] - 10 && y <= p[1] + 10;
+  for (let i = 0; i < (node.inputs?.length ?? 0); i++) {
+    const p = node.getInputPos?.(i);
+    if (p && inside([p[0] - 20, p[1]], m[0], m[1])) return null;
+  }
+  for (let i = 0; i < node.outputs.length; i++) {
+    const p = node.getOutputPos?.(i);
+    if (p && inside(p, m[0], m[1])) return { node, index: i };
+  }
+  return null;
+}
+
+function styledFor(h = hoveredOutput()) {
+  if (!h || typeof h.node.getStyledOutputTooltip !== "function") return null;
+  try {
+    const r = h.node.getStyledOutputTooltip(h.index);
+    return r && Array.isArray(r.lines) && r.lines.length ? r : null;
+  } catch (e) {
+    console.warn("[Draftsman] styled tooltip", e);
+    return null;
+  }
+}
+
+let tipObserver = null;
+/** While a node (or a group, or the canvas) is dragged, the node tooltip (the description of the node under the
+ *  cursor) is hidden: it would cover the alignment guides. It comes back by itself after the drop. */
+function installHideTooltipWhileDragging() {
+  if (window.__dmDragTip) return;
+  window.__dmDragTip = true;
+  const st = document.createElement("style");
+  st.textContent = "body.dm-dragging .node-tooltip{display:none!important}";
+  document.head.appendChild(st);
+  let down = null;
+  const stop = () => { down = null; document.body.classList.remove("dm-dragging"); };
+  addEventListener("pointerdown", (e) => {
+    if (e.button === 0 && e.target === app.canvas?.canvas) down = [e.clientX, e.clientY];
+  }, { capture: true, passive: true });
+  addEventListener("pointermove", (e) => {
+    if (!down) return;
+    if (!(e.buttons & 1)) { stop(); return; }
+    if (Math.abs(e.clientX - down[0]) + Math.abs(e.clientY - down[1]) > 3) document.body.classList.add("dm-dragging");
+  }, { capture: true, passive: true });
+  addEventListener("pointerup", stop, { capture: true, passive: true });
+  addEventListener("pointercancel", stop, { capture: true, passive: true });
+  addEventListener("blur", stop);
+}
+
+function installStyledTooltips() {
+  if (tipObserver) return;
+  const watch = () => tipObserver.observe(document.body, { subtree: true, childList: true, characterData: true });
+  const paint = () => {
+    const tip = document.querySelector(".node-tooltip");
+    if (!tip) return;
+    const walker = document.createTreeWalker(tip, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement?.closest(".dm-tip-lines") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    const text = walker.nextNode();
+    const ours = tip.querySelector(".dm-tip-lines");
+    if (!text) return;
+    const h = hoveredOutput();
+    const key = h ? `${h.node.id}:${h.index}` : "";
+    if (ours && text.data === ours.dataset.title && ours.dataset.key === key) return;   // still our version of it
+    tipObserver.disconnect();
+    try {
+      ours?.remove();
+      const st = getSetting(S.TIPS_ON) !== false ? styledFor(h) : null;
+      if (!st) return;
+      const title = st.title ?? text.data.split(/\n\s*\n/)[0].trim();
+      text.data = title;
+      const box = document.createElement("div");
+      box.className = "dm-tip-lines";
+      box.dataset.title = title;
+      box.dataset.key = key;
+      for (const line of st.lines) {
+        const kind = TIP_COLORS[line?.kind] ? line.kind : "muted";
+        const row = document.createElement("div");
+        row.className = `dm-tip-line dm-tip-${kind}`;
+        row.style.color = TIP_COLORS[kind];
+        row.innerHTML = TIP_ICONS[kind];
+        const span = document.createElement("span");
+        span.textContent = String(line?.text ?? "");
+        row.appendChild(span);
+        box.appendChild(row);
+      }
+      text.after(box);
+    } finally {
+      watch();
+    }
+  };
+  tipObserver = new MutationObserver((records) => {
+    for (const r of records) {
+      const el = r.target.nodeType === 1 ? r.target : r.target.parentElement;
+      if (el?.closest?.(".node-tooltip") || [...r.addedNodes].some((n) => n.nodeType === 1 && (n.matches?.(".node-tooltip") || n.querySelector?.(".node-tooltip")))) {
+        paint();
+        return;
+      }
+    }
+  });
+  watch();
+}
+
 app.registerExtension({
   name: EXT_NAME,
   settings: SETTINGS_DEF,
@@ -2492,6 +3109,9 @@ app.registerExtension({
     patchGroupDraw();
     installGuides(canvas);
     installPainter();
+    installStyledTooltips();
+    installHideTooltipWhileDragging();
+    installLinkFocus(canvas);
     migrateSettings();
 
     if (!app.extensionManager?.command) {
