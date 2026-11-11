@@ -17,6 +17,7 @@ import { app } from "../../scripts/app.js";
 const EXT_NAME = "Tentencode.Draftsman";
 const P = "Draftsman";
 const GROUP_BODY = "dm_body";
+const GROUP_SHAPE = "dm_shape";   // group corners: undefined (square, stock) | "round" | "card"
 const GROUP_BODY_LEGACY = "nt_body"; // NodeTheme (old name of the extension)
 
 // ───────────────────────────── i18n ─────────────────────────────
@@ -62,8 +63,8 @@ const STR = {
     mCopy: "Copy colors",
     mPaste: "Paste colors{n}",
     mReset: "Reset colors{n}",
-    mGroupColors: "Group colors “{title}”…",
-    mGroupNodes: "Color nodes in group “{title}”…",
+    mGroupColors: "Color frame of group…",
+    mGroupNodes: "Color nodes in group…",
     mGroupCopy: "Copy group colors",
     mGroupPaste: "Paste colors to group",
     mGroupReset: "Reset group colors",
@@ -98,6 +99,7 @@ const STR = {
     szHRef: "Height as “{title}”",
     szWHRef: "Size as “{title}”",
     mFitGroup: "Fit group to nodes (grid)",
+    mGroupShape: "Group shape", shBox: "Square corners (stock)", shRound: "Round corners", shCard: "Card (top-left and bottom-right round)",
     mFitGroups: "Fit selected groups to nodes (grid)",
     mTheme: "Theme & color rules…",
     thTitle: "Theme & color rules",
@@ -161,8 +163,8 @@ const STR = {
     mCopy: "Копировать цвета",
     mPaste: "Вставить цвета{n}",
     mReset: "Сбросить цвета{n}",
-    mGroupColors: "Цвета группы «{title}»…",
-    mGroupNodes: "Раскрасить ноды группы «{title}»…",
+    mGroupColors: "Раскрасить рамку группы…",
+    mGroupNodes: "Раскрасить ноды группы…",
     mGroupCopy: "Копировать цвета группы",
     mGroupPaste: "Вставить цвета в группу",
     mGroupReset: "Сбросить цвета группы",
@@ -197,6 +199,7 @@ const STR = {
     szHRef: "Высота как у «{title}»",
     szWHRef: "Размер как у «{title}»",
     mFitGroup: "Подогнать группу по нодам (по клеткам)",
+    mGroupShape: "Форма группы", shBox: "Прямые углы (стандартно)", shRound: "Скруглённые углы", shCard: "Карточка (скруглены левый верхний и правый нижний)",
     mFitGroups: "Подогнать выделенные группы по нодам (по клеткам)",
     mTheme: "Тема и правила раскраски…",
     thTitle: "Тема и правила раскраски",
@@ -272,6 +275,7 @@ const S = {
   NUDGE_BIG: `${P}.Layout.NudgeBig`,
   GROUP_PAD: `${P}.Layout.GroupPadding`,
   TIPS_ON: `${P}.Tooltips.Styled`,
+  TITLE_BOX: `${P}.Nodes.CollapseButton`,
   LINKS_FOCUS: `${P}.Links.Focus`,
   LINKS_DIM: `${P}.Links.Dim`,
   LINKS_ANIM: `${P}.Links.Animate`,
@@ -315,6 +319,7 @@ const DEFAULTS = {
   [S.GROUP_PAD]: 1,
   [S.MIGRATED]: false,
   [S.TIPS_ON]: true,
+  [S.TITLE_BOX]: "button",
   [S.LINKS_FOCUS]: true,
   [S.LINKS_DIM]: 25,
   [S.LINKS_ANIM]: true,
@@ -442,6 +447,14 @@ const SETTINGS_DEF = [
   { id: S.TIPS_ON, category: [CAT, "Tooltips", "1"], name: "Styled tooltips for node outputs",
     tooltip: "Nodes that describe their outputs (e.g. Rigstools) get a short title and coloured lines about the current value in the output tooltip: green — what comes out, amber — a substitute or a problem, grey — a note. Other tooltips are not changed.",
     type: "boolean", defaultValue: DEFAULTS[S.TIPS_ON] },
+  { id: S.TITLE_BOX, category: [CAT, "Nodes", "1"], name: "Collapse button in the node header",
+    tooltip: "Button — a chevron on a dark backing (down: expanded, right: collapsed); hovered, the backing takes the node body color.\nPlus / minus — a framed − (expanded) or + (collapsed).\nComfyUI — the stock dot.",
+    type: "combo", defaultValue: DEFAULTS[S.TITLE_BOX], onChange: redraw,
+    options: [
+      { text: "Button with a chevron", value: "button" },
+      { text: "Plus / minus", value: "plusminus" },
+      { text: "ComfyUI (stock dot)", value: "stock" },
+    ] },
   { id: S.MIGRATED, category: [CAT, "Layout", "9"], name: "Settings migrated from NodeTheme", type: "hidden",
     defaultValue: DEFAULTS[S.MIGRATED] },
 ];
@@ -625,14 +638,27 @@ function groupChildren(g) {
 }
 
 function beginChange() { try { graphOf()?.beforeChange?.(); } catch {} }
-function endChange() {
+/** Ends a change (undo step). A slow one (> 300 ms, also up to the next drawn frame) is reported in the browser
+ *  console with the time of every part, to find what holds it up. */
+function endChange(what = "change") {
+  const t0 = performance.now();
   try { graphOf()?.afterChange?.(); } catch {}
+  const t1 = performance.now();
   try {
     const ct = app.extensionManager?.workflow?.activeWorkflow?.changeTracker;
     if (ct?.captureCanvasState) ct.captureCanvasState();
     else ct?.checkState?.();
   } catch {}
+  const t2 = performance.now();
   redraw();
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const t3 = performance.now();
+    if (t3 - t0 > 300) {
+      console.warn(`[Draftsman] ${what} took ${Math.round(t3 - t0)} ms: afterChange ${Math.round(t1 - t0)} ms, `
+        + `undo snapshot ${Math.round(t2 - t1)} ms, until the next frame ${Math.round(t3 - t2)} ms `
+        + `(${allNodes().length} nodes, ${allGroups().length} groups)`);
+    }
+  }));
 }
 
 function toast(summary, detail, severity = "info") {
@@ -734,32 +760,42 @@ function drawGroupCustom(g, gc, ctx, body) {
   const ea = gc?.editor_alpha ?? 1;
   const head = g.color || G.defaultColour || "#3f789e";
   const rl = G.resizeLength ?? 10;
+  // corners as the node shapes: round — all four, card — top-left and bottom-right (tl, tr, br, bl)
+  const shape = g.flags?.[GROUP_SHAPE];
+  const R = Math.min(L.ROUND_RADIUS ?? 8, TH / 2, w / 2, hgt / 2);
+  const all = shape === "round" ? [R, R, R, R] : shape === "card" ? [R, 0, R, 0] : [0, 0, 0, 0];
+  const box = (bx, by, bw, bh, r) => {
+    if (r.some(Boolean) && ctx.roundRect) ctx.roundRect(bx, by, bw, bh, r); else ctx.rect(bx, by, bw, bh);
+  };
 
   ctx.save();
   // body (below the header) — same 25% tint the stock group uses
   ctx.globalAlpha = 0.25 * ea;
   ctx.fillStyle = body;
   ctx.beginPath();
-  ctx.rect(x + 0.5, y + 0.5 + TH, w, Math.max(0, hgt - TH));
+  box(x + 0.5, y + 0.5 + TH, w, Math.max(0, hgt - TH), [0, 0, all[2], all[3]]);
   ctx.fill();
   // header — stock header is two 25% layers ≈ 44%
   ctx.globalAlpha = 0.4375 * ea;
   ctx.fillStyle = head;
   ctx.beginPath();
-  ctx.rect(x + 0.5, y + 0.5, w, TH);
+  box(x + 0.5, y + 0.5, w, TH, [all[0], all[1], 0, 0]);
   ctx.fill();
-  // frame + resize handle in the body color
+  // frame + resize handle in the body color (the handle is clipped to a rounded corner)
   ctx.globalAlpha = ea;
   ctx.strokeStyle = body;
   ctx.beginPath();
-  ctx.rect(x + 0.5, y + 0.5, w, hgt);
+  box(x + 0.5, y + 0.5, w, hgt, all);
   ctx.stroke();
+  ctx.save();
+  ctx.clip();
   ctx.fillStyle = body;
   ctx.beginPath();
   ctx.moveTo(x + w, y + hgt);
   ctx.lineTo(x + w - rl, y + hgt);
   ctx.lineTo(x + w, y + hgt - rl);
   ctx.fill();
+  ctx.restore();
   // title
   const c = parseColor(head);
   const lum255 = c ? 0.299 * c.r + 0.587 * c.g + 0.114 * c.b : 255;
@@ -777,7 +813,7 @@ function drawGroupCustom(g, gc, ctx, body) {
     ctx.globalAlpha = 0.8;
     ctx.strokeStyle = L.NODE_BOX_OUTLINE_COLOR ?? "#fff";
     ctx.beginPath();
-    ctx.rect(b[0] - pad, b[1] - pad, b[2] + 2 * pad, b[3] + 2 * pad);
+    box(b[0] - pad, b[1] - pad, b[2] + 2 * pad, b[3] + 2 * pad, all.map((r) => (r ? r + pad : 0)));
     ctx.stroke();
   }
   ctx.restore();
@@ -789,13 +825,85 @@ function patchGroupDraw() {
   if (!proto?.draw || proto.draw.__nt) return;
   const orig = proto.draw;
   const wrapped = function (gc, ctx) {
-    const body = groupBody(this);
+    // our drawing for a body color or for rounded corners; a stock group stays stock
+    const body = groupBody(this) ?? (this.flags?.[GROUP_SHAPE] ? this.color || this.constructor.defaultColour || "#3f789e" : null);
     if (!body) return orig.apply(this, arguments);
     try { drawGroupCustom(this, gc, ctx, body); }
     catch (e) { console.error("[Draftsman] group draw", e); return orig.apply(this, arguments); }
   };
   wrapped.__nt = true;
   proto.draw = wrapped;
+}
+
+// ──────────────────────── collapse button in the node header ────────────────────────
+// LiteGraph draws a dot (or a square) at the left of the header; a click anywhere in that title-height square
+// collapses the node. Only the look is replaced; the click area and the collapse itself stay stock.
+
+const titleBox = { hover: null };
+
+function titleBoxStyle() {
+  const v = getSetting(S.TITLE_BOX);
+  return v === "plusminus" || v === "stock" ? v : "button";
+}
+
+function drawTitleBoxDm(node, ctx, TH, style) {
+  const L = LG();
+  const collapsed = !!node.flags?.collapsed;
+  const hover = titleBox.hover === node;
+  const fg = node.selected ? (L.NODE_SELECTED_TITLE_COLOR ?? "#fff")
+    : (node.constructor?.title_text_color || L.NODE_TITLE_COLOR || "#ddd");
+  const body = node.renderingBgColor ?? node.bgcolor ?? L.NODE_DEFAULT_BGCOLOR ?? "#353535";
+  const k = TH / 30;                                    // sizes below are for the default header of 30 px
+  const cx = TH / 2, cy = -TH / 2;
+  ctx.save();
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  if (style === "button") {
+    const s = 20 * k;
+    ctx.beginPath(); ctx.roundRect(cx - s / 2, cy - s / 2, s, s, 5 * k);
+    ctx.fillStyle = hover ? body : "rgba(0,0,0,0.32)";   // darker than any header: the chevron stays readable
+    ctx.fill();
+    if (hover) { ctx.globalAlpha = 0.35; ctx.strokeStyle = fg; ctx.lineWidth = 1; ctx.stroke(); ctx.globalAlpha = 1; }
+    ctx.translate(cx, cy);
+    if (collapsed) ctx.rotate(-Math.PI / 2);
+    ctx.beginPath(); ctx.moveTo(-4.5 * k, -2 * k); ctx.lineTo(0, 2.5 * k); ctx.lineTo(4.5 * k, -2 * k);
+    ctx.strokeStyle = fg; ctx.lineWidth = 2 * k; ctx.stroke();
+  } else {                                             // plus / minus in a frame
+    const s = 13 * k;
+    ctx.beginPath(); ctx.roundRect(cx - s / 2, cy - s / 2, s, s, 3 * k);
+    if (hover) { ctx.fillStyle = body; ctx.fill(); }
+    ctx.globalAlpha = hover ? 0.8 : 0.55; ctx.strokeStyle = fg; ctx.lineWidth = 1.2 * k; ctx.stroke(); ctx.globalAlpha = 1;
+    const a = 3.5 * k;
+    ctx.beginPath(); ctx.moveTo(cx - a, cy); ctx.lineTo(cx + a, cy);
+    if (collapsed) { ctx.moveTo(cx, cy - a); ctx.lineTo(cx, cy + a); }
+    ctx.strokeStyle = fg; ctx.lineWidth = 1.8 * k; ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function patchTitleBox() {
+  const proto = LG().LGraphNode?.prototype;
+  if (!proto?.drawTitleBox || proto.drawTitleBox.__dm) return;
+  const orig = proto.drawTitleBox;
+  const wrapped = function (ctx, opts = {}) {
+    const style = titleBoxStyle();
+    // the stock look, or a node that draws its own box
+    if (style === "stock" || this.onDrawTitleBox) return orig.apply(this, arguments);
+    try { drawTitleBoxDm(this, ctx, opts.title_height ?? LG().NODE_TITLE_HEIGHT ?? 30, style); }
+    catch (e) { console.error("[Draftsman] title box", e); return orig.apply(this, arguments); }
+  };
+  wrapped.__dm = true;
+  proto.drawTitleBox = wrapped;
+
+  // hover: redraw when the pointer enters or leaves the collapse square of a node
+  addEventListener("pointermove", () => {
+    setTimeout(() => {                                 // after LiteGraph updated graph_mouse / node_over
+      const c = app.canvas;
+      if (!c || titleBoxStyle() === "stock") { titleBox.hover = null; return; }
+      const n = c.node_over, m = c.graph_mouse;
+      const over = n && m && typeof n.isPointInCollapse === "function" && n.isPointInCollapse(m[0], m[1]) ? n : null;
+      if (over !== titleBox.hover) { titleBox.hover = over; c.setDirty?.(true, false); }
+    }, 0);
+  }, { passive: true, capture: true });
 }
 
 // ───────────────────────────── dialog ─────────────────────────────
@@ -934,6 +1042,9 @@ const alignIcon = (c) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1
   `<rect x="4.2" y="3" width="9.5" height="3.6" rx="1" fill="${c}"/><rect x="4.2" y="9.4" width="6" height="3.6" rx="1" fill="${c}"/></svg>`;
 const fitIcon = (c) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="${c}" stroke-width="1.6" stroke-linecap="round">` +
   `<path d="M1.5 5V1.5H5M11 1.5h3.5V5M14.5 11v3.5H11M5 14.5H1.5V11"/><rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="${c}" stroke="none"/></svg>`;
+// a frame with one rounded corner: the corners of the group
+const shapeIcon = (c) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="${c}" stroke-width="1.6" stroke-linejoin="round">` +
+  `<path d="M2 14V7.2A5.2 5.2 0 0 1 7.2 2H14v12z"/></svg>`;
 const brushIcon = (c, tip) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">` +
   `<path stroke="${c}" stroke-width="2.2" d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/>` +
   `<path fill="${tip}" stroke="${tip}" stroke-width="1.6" d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/></svg>`;
@@ -944,6 +1055,10 @@ const DRAFTING_COMPASS = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2
 const MENU_ICON_CSS = `
 .litemenu-entry.dm-mi-layout::before{background-image:${svgUrl(alignIcon("#7fb2ff"))}}
 .litemenu-entry.dm-mi-fit::before{background-image:${svgUrl(fitIcon("#7fb2ff"))}}
+.litemenu-entry.dm-mi-shape::before{background-image:${svgUrl(shapeIcon("#7fb2ff"))}}
+/* the "Draftsman" label of our menu section: the drafting compass, as in the settings sidebar */
+.litemenu-entry.dm-mi-title::before{content:"";display:inline-block;width:14px;height:14px;margin-right:6px;vertical-align:-2px;
+  background:center/contain no-repeat ${svgUrl(DRAFTING_COMPASS.replace('stroke="#000"', 'stroke="#dde"'))}}
 .litemenu-entry.dm-mi-brush::before{background-image:${svgUrl(brushIcon("#c9a26b", "#ff4fd8"))}}
 /* settings sidebar: replace the generic folder icon of our category */
 [data-nav-id="root/Draftsman"] > i{-webkit-mask-image:${svgUrl(DRAFTING_COMPASS)} !important;mask-image:${svgUrl(DRAFTING_COMPASS)} !important}
@@ -1370,8 +1485,10 @@ class ColorDialog {
     this.closed = true;
     if (!commit) this.restore();
     document.removeEventListener("keydown", this.onKey, true);
+    const t0 = performance.now();
     this.el.remove();
-    endChange();
+    endChange(`colors dialog ${commit ? "Apply" : "Cancel"} (${this.snap.size} ${this.kind}, removing the dialog `
+      + `${Math.round(performance.now() - t0)} ms)`);
     if (activeDialog === this) activeDialog = null;
   }
 }
@@ -2376,11 +2493,53 @@ function layoutMenu(ref) {
   };
 }
 
+/** Our menu section as one block with no separators inside: every item is marked (__dm). ComfyUI builds the menu
+ *  from several sources, and other extensions (rgthree) insert theirs by position, so they may land between our
+ *  items; the marked items are gathered back together right before the menu opens (patchContextMenu). */
+function block(list) {
+  const out = [];
+  for (const it of list) {
+    if (it === null) { if (!out.length) out.push(null); continue; }
+    out.push({ ...it, __dm: true });
+  }
+  return out;
+}
+
+/** The menu items in their final order: ours as one run, where our first item stands, with a separator around it. */
+function regroupMenu(values) {
+  if (!Array.isArray(values)) return values;
+  const first = values.findIndex((v) => v && v.__dm);
+  if (first < 0) return values;
+  const ours = values.filter((v) => v && v.__dm);
+  const before = values.slice(0, first);
+  const after = values.slice(first).filter((v) => !(v && v.__dm));
+  while (after.length && after[0] === null && after[1] === null) after.shift();
+  if (before.length && before[before.length - 1] !== null) before.push(null);
+  if (after.length && after[0] !== null) after.unshift(null);
+  return [...before, ...ours, ...after];
+}
+
+function patchContextMenu() {
+  const L = LG();
+  const CM = L.ContextMenu;
+  if (!CM || CM.__dm) return;
+  // function-style, as the other menu extensions wrap it (they call the previous one with .call(this, …))
+  const Wrapped = function (values, ...rest) {
+    let v = values;
+    try { v = regroupMenu(values); } catch (e) { console.warn("[Draftsman] menu order", e); }
+    return CM.call(this, v, ...rest);
+  };
+  Wrapped.prototype = CM.prototype;
+  Object.setPrototypeOf(Wrapped, CM);   // static members (LiteGraph.ContextMenu.closeAll …)
+  Wrapped.__dm = true;
+  L.ContextMenu = Wrapped;
+}
+
 function nodeMenuItems(node) {
   const sel = getSelectedNodes();
   const nodes = node && !sel.includes(node) ? [node] : sel.length ? sel : node ? [node] : [];
   const n = countSuffix(nodes.length);
-  return [
+  return block([
     null,
     menuTitle(),
     withKey(ring({ content: t("mNodeColors", { n }), callback: () => openColorDialog({ kind: "nodes", items: nodes }) }), "Draftsman.OpenColors"),
@@ -2393,7 +2552,7 @@ function nodeMenuItems(node) {
     null,
     layoutMenu(node),
     ...toggleItems(),
-  ];
+  ]);
 }
 
 function groupItemsFor(group) {
@@ -2409,13 +2568,30 @@ function groupItemsFor(group) {
     ] : []),
     { content: t("mGroupReset"), callback: () => resetColors("groups", groups) },
   ].map(ring).concat([
+    shapeMenu(group, groups),
     brush({ content: t("mPainterGroup"), callback: () => startPainter("groups", group) }),
     withKey({ content: t("mFitGroup"), className: "dm-mi-icon dm-mi-fit", callback: () => fitGroups(groups) }, "Draftsman.FitGroups"),
   ]);
 }
 
+/** "Group shape ▸": the corners of the groups, as the node shapes (the current one is marked). */
+function shapeMenu(group, groups) {
+  const cur = group.flags?.[GROUP_SHAPE] ?? "box";
+  const set = (v) => {
+    beginChange();
+    for (const g of groups) {
+      if (v === "box") { if (g.flags) delete g.flags[GROUP_SHAPE]; }
+      else { g.flags = g.flags || {}; g.flags[GROUP_SHAPE] = v; }
+    }
+    endChange();
+  };
+  const opt = (v, key) => ({ content: (cur === v ? "● " : "\u2003") + t(key), callback: () => set(v) });
+  return { content: t("mGroupShape"), className: "dm-mi-icon dm-mi-shape", has_submenu: true,
+    submenu: { options: [opt("box", "shBox"), opt("round", "shRound"), opt("card", "shCard")] } };
+}
+
 function groupMenuItems(group) {
-  return group ? [null, menuTitle(), ...groupItemsFor(group), ...toggleItems()] : [];
+  return group ? block([null, menuTitle(), ...groupItemsFor(group), ...toggleItems()]) : [];
 }
 
 function groupAtMouse(canvas = canvasOf()) {
@@ -2437,7 +2613,7 @@ function canvasMenuItems() {
   items.push(withKey(ring({ content: t("mTheme"), callback: () => openThemeDialog() }), "Draftsman.ThemeRules"));
   if (getSelectedNodes().length > 1 || getSelectedGroups().length) items.push(null, layoutMenu(null));
   items.push(...toggleItems());
-  return items;
+  return block(items);
 }
 
 function patchProtoMenu(proto, method, make) {
@@ -3107,6 +3283,8 @@ app.registerExtension({
 
     injectCss(); // also styles our context-menu items and the settings icon
     patchGroupDraw();
+    patchTitleBox();
+    patchContextMenu();
     installGuides(canvas);
     installPainter();
     installStyledTooltips();

@@ -29,14 +29,16 @@ Follows the ComfyUI **Comfy.Locale** setting: `ru` gives Russian, any other loca
 Menus, dialogs and canvas labels switch immediately; setting and command names switch after a ComfyUI restart.
 
 ## Context menu
-Everything lives in one **Draftsman** block, with hotkey hints on the right (they follow your own key bindings).
+Everything lives in one **Draftsman** block under its drafting-compass label, with hotkey hints on the right (they
+follow your own key bindings). The block stays in one piece even when other extensions put their items into the same
+menu.
 
 ![Context menu](docs/menu.png)
 
 | Where | What |
 |---|---|
 | Right-click a node | header & body colors · reset · format painter · Layout ▸ · guides · spacing magnet |
-| Right-click a group | group colors · color the group's nodes · reset · format painter · fit group to nodes · theme & rules |
+| Right-click a group | color frame of group · color nodes in group · reset · Group shape ▸ · format painter · fit group to nodes · theme & rules |
 | Right-click the canvas | colors of the selection · theme & color rules · Layout ▸ · guides · spacing magnet |
 
 ## Colors
@@ -57,6 +59,22 @@ Everything lives in one **Draftsman** block, with hotkey hints on the right (the
   Settings for the extended mode: paste a style into the whole selection at once and carry it between workflow tabs.
 
 ![Theme and color rules](docs/rules.png)
+
+## Group shape
+**Group shape ▸** in the group menu sets the corners of the group, like the shapes of nodes: square (stock), round, or
+card (top-left and bottom-right corners round). It applies to all selected groups, is kept in the workflow
+(`group.flags.dm_shape`) and is undone with Ctrl+Z. Without Draftsman a group is drawn with square corners.
+
+## Node collapse button
+The dot at the left of a node header collapses the node; it is easy to miss, so Draftsman draws it as a button.
+Settings → Draftsman → Nodes → **Collapse button in the node header**:
+- **Button with a chevron** (default) — a chevron on a dark backing: down when the node is expanded, right when it is
+  collapsed; hovered, the backing takes the color of the node body;
+- **Plus / minus** — a framed − (expanded) or + (collapsed);
+- **ComfyUI (stock dot)**.
+
+The icon takes the color of the title text, so it stays visible on colored headers. Only the look changes: the click
+area and the collapsing are stock. Nodes that draw their own button (e.g. subgraphs) keep it.
 
 ## Layout
 The **Layout ▸** submenu (two or more selected nodes):
@@ -126,7 +144,7 @@ tooltip is shown again.
 All commands (`Draftsman: …`) can be rebound in Settings → Keybinding.
 
 ## Settings
-Settings → **Draftsman**: Guides, Spacing, Layout, Colors, Links, Tooltips. Each non-obvious setting has an ⓘ tooltip.
+Settings → **Draftsman**: Guides, Spacing, Layout, Colors, Links, Tooltips, Nodes. Each non-obvious setting has an ⓘ tooltip.
 
 ## Limitations
 - The separate group header/body rendering replicates the stock group look of the 1.5x frontend.
