@@ -2849,7 +2849,7 @@ function installLinkFocus(canvas) {
     const path = (rr ?? link).path;
     if (path && !skipBorder && a && b) {
       const poly = segmentPoly(this, a, b, sd, ed, opts);
-      const seg = { path, role, link, poly, len: poly.len };
+      const seg = { path, role, link, poly, len: poly.len, owner: rr ?? link };
       if (rr) linkFocus.segs.reroutes.set(rr.id, seg); else linkFocus.segs.finals.set(link.id, seg);
       linkFocus.known.set(rr ? "r" + rr.id : "f" + link.id, seg);
     }
@@ -2927,6 +2927,47 @@ function rerouteChain(graph, link) {
   return chain;
 }
 
+/** The centre markers of the focused segments, as LiteGraph draws them (a circle or an arrow), in the line's colour. */
+function drawFocusMarkers(canvas, ctx, all) {
+  const shape = canvas.linkMarkerShape;
+  if (!shape || (canvas.ds?.scale ?? 1) < 0.6 || canvas.low_quality) return;   // 0 — LinkMarkerShape.None
+  const arrow = shape === 2;
+  for (const seg of all) {
+    const pos = seg.owner?._pos;
+    if (!pos) continue;
+    ctx.beginPath();
+    const ang = seg.owner._centreAngle;
+    if (arrow && ang !== undefined) {
+      const t = ctx.getTransform();
+      ctx.translate(pos[0], pos[1]); ctx.rotate(ang);
+      ctx.moveTo(-3.2, -5); ctx.lineTo(7, 0); ctx.lineTo(-3.2, 5);
+      ctx.setTransform(t);
+    } else ctx.arc(pos[0], pos[1], 5, 0, Math.PI * 2);
+    ctx.fillStyle = focusColor(seg.role, seg.link);
+    ctx.fill();
+  }
+}
+
+/** The dots of the reroutes the focused links run through, as LiteGraph draws them, in the colour of the line. */
+function drawFocusedReroutes(canvas, ctx, segs) {
+  const graph = canvas.graph;
+  for (const [id, seg] of segs.reroutes) {
+    const r = graph?.getReroute?.(id) ?? graph?.reroutes?.get?.(id);
+    if (!r?.pos) continue;
+    const R = r.constructor?.radius ?? 10;
+    const [x, y] = r.pos;
+    ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(x, y, R, 0, 2 * Math.PI);
+    ctx.fillStyle = focusColor(seg.role, seg.link);
+    ctx.lineWidth = R * 0.1; ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, R * 0.8, 0, 2 * Math.PI);
+    ctx.fillStyle = "#ffffff55"; ctx.strokeStyle = "rgba(0,0,0,0.3)";
+    ctx.fill(); ctx.stroke();
+    if (r.selected) { ctx.strokeStyle = "#fff"; ctx.beginPath(); ctx.arc(x, y, R * 1.2, 0, 2 * Math.PI); ctx.stroke(); }
+  }
+}
+
 function drawFocusedLinks(canvas, ctx, segs) {
   const width = canvas.connections_width ?? 3;
   const cfg = linkFocus.cfg;
@@ -2945,6 +2986,12 @@ function drawFocusedLinks(canvas, ctx, segs) {
   ctx.globalAlpha = 1;
   ctx.lineWidth = width + 1;
   for (const seg of all) { ctx.strokeStyle = focusColor(seg.role, seg.link); ctx.stroke(seg.path); }
+
+  // the centre markers (the points that add a reroute) are drawn again over the bright lines in the line's colour —
+  // LiteGraph paints them white on a highlighted link, and the line covered only their middle
+  drawFocusMarkers(canvas, ctx, all);
+  // the reroute dots of the focused links too, in the same colour as the line
+  drawFocusedReroutes(canvas, ctx, segs);
 
   // 2. a comet: a bright head with a fading tail runs from the output to the input — one at a time on a link; the
   //    next one leaves the output only when the previous one (its tail too) has reached the input. Its position is

@@ -9,7 +9,7 @@
   <a href="https://github.com/ScrudgMcDack/ComfyUI-Draftsman/releases"><img src="https://img.shields.io/github/release-date/ScrudgMcDack/ComfyUI-Draftsman?color=green&logo=github&label=Release%20date" alt="Release date"></a>
 </p>
 
-<p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
+<p align="center"><b>English</b> · <a href="README.ru.md">Русский</a> · <a href="CHANGELOG.md">Changelog</a></p>
 
 Styling and layout tools for the ComfyUI graph: separate header and body colors for nodes **and groups**,
 a format painter, color rules and theme files, alignment guides, a spacing magnet, and align / line up /
@@ -105,6 +105,12 @@ In a big workflow the links of one node are hard to follow, so Draftsman puts th
   the output to the input; the next one leaves only when the previous one has arrived (through reroutes it runs the
   whole way; links of one output start their comets together, so on a shared trunk they are one comet);
 - **hovering an input or output** — only its links are highlighted.
+
+![Selected node: incoming links blue, outgoing orange, a comet on each](docs/links_select.gif)
+
+![Selected Load Checkpoint: the VAE link runs through two reroutes, the links of one output start their comets together](docs/links_output.gif)
+
+![Hovering an output, then an input: only their links are highlighted](docs/links_hover.gif)
 
 Settings → Draftsman → Links: on/off, opacity of the other links, animation and its speed, the two colors (or keep
 the data-type colors). The comets are drawn on their own transparent layer above the canvas at the screen rate, so
